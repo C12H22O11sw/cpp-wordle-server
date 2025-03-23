@@ -10,6 +10,7 @@
 
 #define PORT 8080
 
+int counter;
 std::unordered_set<std::string> valid_words;
 std::string answer;
 
@@ -59,7 +60,7 @@ std::string generateHint(std::string& guess, std::string& answer) {
         else {
             bool partial_match = false;
             for (int j = 0; j < 5; ++j) {
-                if (j != i && guess[i] == answer[j]) {
+                if (j != i && guess[i] == answer[j] && guess[j] != answer[j]) {
                     partial_match = true;
                     break;
                 }
@@ -76,9 +77,9 @@ void playWordle(int client_fd) {
     int attempts_left = 6;
     
     while (attempts_left) {
-        char* message;
-        sprintf(message, "Please enter 5-letter word (%d attemps remaining): ", attempts_left);
-        send(client_fd, message, strlen(message), 0);
+        std::string message = "Please enter 5-letter word (" + std::to_string(attempts_left) + " attempts remaining): ";
+        send(client_fd, message.c_str(), message.length(), 0);
+        
 
         // Read the guess from the client
         if (read(client_fd, buffer, 1024) < 0) {
@@ -102,9 +103,9 @@ void playWordle(int client_fd) {
         }
 
         // Send hint to the client
-        const char* hint = (generateHint(guess, answer) + "\n").c_str();
+        std::string hint = generateHint(guess, answer) + "\n";
 
-        send(client_fd, hint, strlen(hint), 0);
+        send(client_fd, hint.c_str(), hint.length(), 0);
 
         // Check for win condition
         if (guess == answer) {
@@ -159,6 +160,7 @@ int main(int argc, char** argv) {
     std::cout << "Server listening on port " << PORT << std::endl;
 
     // Main server loop
+    counter = 0;
     while (true) {
         if ((client_fd = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0)
             error("Accept failed");
@@ -166,12 +168,15 @@ int main(int argc, char** argv) {
         pid_t pid = fork();
         if (pid == 0) {
             close(server_fd); // Child process: handle the client
+            std::cout << "Starting child process " << counter << std::endl;
             playWordle(client_fd);
+            std::cout << "Ending child process " << counter << std::endl;
             exit(0); // End the child process
         }
         else if (pid > 0) {
             close(client_fd); // Parent process: continue accepting new clients
         }
+        ++counter;
 
     }
 
