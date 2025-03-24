@@ -6,13 +6,14 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unordered_set>
+#include <vector>
 #include <fstream>
 
 #define PORT 8080
 
 int counter;
-std::unordered_set<std::string> valid_words;
-std::string answer;
+std::unordered_set<std::string> validWords;
+std::vector<std::string> answerList;
 
 // converts strings to lowercase and removes non-apha characters
 std::string formatWord(std::string& str) {
@@ -40,11 +41,33 @@ std::unordered_set<std::string> loadValidWords(std::string filename) {
         if (word.length() == 5) {
             valid_words.insert(formatWord(word));
         } else {
-            std::cout << "Warning: " << word << " is not the right lenght" << std::endl;
+            std::cout << "Warning: " << word << " is not the right length" << std::endl;
         }
     }
 
     return valid_words;
+
+}
+
+std::vector<std::string> loadAnswerList(std::string filename, std::unordered_set<std::string> validWords) {
+    
+    std::ifstream inputFile(filename);
+    if (!inputFile) {
+        std::cerr << "Error: Could not open file" << std::endl;
+        exit(1);
+    }
+
+    std::vector<std::string> answerList;
+    std::string word;
+    while (inputFile >> word) {
+        if ( validWords.find(word) != validWords.end() ) {
+            answerList.push_back(word);
+        } else {
+            std::cout << "Warning: " << word << " not a valid word" << std::endl;
+        }
+    }
+
+    return answerList;
 
 }
 
@@ -74,49 +97,79 @@ std::string generateHint(std::string& guess, std::string& answer) {
 // Handles the Wordle game logic for a connected client
 void playWordle(int client_fd) {
     char buffer[1024];
-    int attempts_left = 6;
-    
-    while (attempts_left) {
-        std::string message = "Please enter 5-letter word (" + std::to_string(attempts_left) + " attempts remaining): ";
-        send(client_fd, message.c_str(), message.length(), 0);
+
+    for (auto answer : answerList) {
+        int attempts_left = 6;
         
+        while (true) {
+            std::string message = "Please enter 5-letter word (" + std::to_string(attempts_left) + " attempts remaining): ";
+            send(client_fd, message.c_str(), message.length(), 0);
+            
 
-        // Read the guess from the client
-        if (read(client_fd, buffer, 1024) < 0) {
-            std::cout << "Warning read() failed" << std::endl;
-            continue;
+            // Read the guess from the client
+            if (read(client_fd, buffer, 1024) < 0) {
+                std::cout << "Warning read() failed" << std::endl;
+                continue;
+            }
+            std::string guess = buffer;
+            guess = formatWord(guess);
+
+            // Check if the guess is a valid word
+            if (guess.length() != 5) {
+                const char* m = "Invalid input! Please enter exactly 5 letters.\n";
+                int n = guess.length();
+                send(client_fd, &n, sizeof(n), 0);
+                continue;
+            }
+            if ( validWords.find(guess) == validWords.end() ) {
+                const char* m = "Word not in word list. Try again\n";
+                send(client_fd, m, strlen(m), 0);
+                continue;
+            }
+
+            // Send hint to the client
+            std::string hint = generateHint(guess, answer) + "\n";
+
+            send(client_fd, hint.c_str(), hint.length(), 0);
+
+            // Check for win condition
+            if (guess == answer) {
+                std::string m = "You Won!\n";
+                send(client_fd, m.c_str(), m.length(), 0);
+                break;
+            }
+            
+            --attempts_left; 
+            if (!attempts_left) {
+                std::string m = "Game Over!\nThe correct word was " + answer + "\n";
+                send(client_fd, m.c_str(), m.length(), 0);
+                break;
+            }
         }
-        std::string guess = buffer;
-        guess = formatWord(guess);
 
-        // Check if the guess is a valid word
-        if (guess.length() != 5) {
-            const char* m = "Invalid input! Please enter exactly 5 letters.\n";
-            int n = guess.length();
-            send(client_fd, &n, sizeof(n), 0);
-            continue;
+        // Promt client to start a new game
+        std::string m = "Would you like to continue? (y/n) ";
+        send(client_fd, m.c_str(), m.length(), 0);
+
+        while (true) {
+            if (read(client_fd, buffer, 1024) < 0) {
+                std::cout << "Warning read() failed" << std::endl;
+                continue;
+            }
+            if (std::tolower(buffer[0]) == 'y') {
+                std::string m = "Starting a new game\n";
+                send(client_fd, m.c_str(), m.length(), 0);
+                break;
+            }
+            else if (std::tolower(buffer[0]) == 'n') {
+                close(client_fd);
+                return;
+            }
         }
-        if ( valid_words.find(guess) == valid_words.end() ) {
-            const char* m = "Word not in word list. Try again\n";
-            send(client_fd, m, strlen(m), 0);
-            continue;
-        }
-
-        // Send hint to the client
-        std::string hint = generateHint(guess, answer) + "\n";
-
-        send(client_fd, hint.c_str(), hint.length(), 0);
-
-        // Check for win condition
-        if (guess == answer) {
-            const char* m = "You Won!\n";
-            send(client_fd, m, strlen(m), 0);
-            break;
-        }
-        
-        --attempts_left; 
-
     }
+
+    std::string m = "Congratulations! You have solved all the wordle games\n";
+    send(client_fd, m.c_str(), m.length(), 0);   
 
     close(client_fd);
 }
@@ -130,13 +183,14 @@ int main(int argc, char** argv) {
 
     /* Handle command line arguments */
     if (argc != 3)
-        error("Usage: <executable> <wordlist_file> <answer_word>");
+        error("Usage: <executable> <wordlist_file> <answer_file>");
 
-    std::string filename = argv[1];
-    answer = argv[2];
+    std::string wordListFilename = argv[1];
+    std::string answerListFilename = argv[2];
 
     // Load set of valid words from given file
-    valid_words = loadValidWords(filename);
+    validWords = loadValidWords(wordListFilename);
+    answerList = loadAnswerList(answerListFilename, validWords);
     
 
     // Set up TCP connection for server
